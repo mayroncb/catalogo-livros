@@ -1,8 +1,18 @@
 const STORAGE_KEY = "minha_estante_catalogo_v1";
 const SHEETS_URL_KEY = "minha_estante_sheets_url_v1";
+const ADMIN_KEY_STORAGE = "minha_estante_admin_key_v1";
+
+const isAdmin = document.body.dataset.mode === "admin";
+const urlParams = new URLSearchParams(window.location.search);
+const paramSheetsUrl = urlParams.get("sheets") || "";
 
 let books = loadBooks();
-let sheetsUrl = localStorage.getItem(SHEETS_URL_KEY) || "";
+let sheetsUrl =
+  paramSheetsUrl ||
+  localStorage.getItem(SHEETS_URL_KEY) ||
+  window.APP_CONFIG?.sheetsUrl ||
+  "";
+let adminKey = sessionStorage.getItem(ADMIN_KEY_STORAGE) || "";
 let currentView = "grid"; // "grid" | "list"
 
 // Elements
@@ -143,7 +153,9 @@ function renderCard(book) {
         <p class="book-author" title="${escapeHtml(book.author)}">${escapeHtml(book.author)}</p>
         <div class="book-price">${formatBRL(book.price)}</div>
       </div>
-      <div class="book-actions">
+      ${
+        isAdmin
+          ? `<div class="book-actions">
         <button type="button" class="btn btn-sm btn-sold" data-action="sell" ${qty <= 0 ? "disabled" : ""}>
           -1 Vendido
         </button>
@@ -153,7 +165,9 @@ function renderCard(book) {
         <button type="button" class="btn btn-sm btn-danger-ghost" data-action="delete" title="Excluir livro">
           ✕
         </button>
-      </div>
+      </div>`
+          : ""
+      }
     </article>
   `;
 }
@@ -177,7 +191,9 @@ function renderRow(book) {
       <div class="row-qty ${qty <= 0 ? "zero" : ""}">
         ${qty > 0 ? `${qty} disp.` : "Esgotado"}
       </div>
-      <div class="row-actions">
+      ${
+        isAdmin
+          ? `<div class="row-actions">
         <button type="button" class="btn btn-sm btn-sold" data-action="sell" ${qty <= 0 ? "disabled" : ""}>
           -1 Vendido
         </button>
@@ -187,13 +203,16 @@ function renderRow(book) {
         <button type="button" class="btn btn-sm btn-danger-ghost" data-action="delete" title="Excluir">
           ✕
         </button>
-      </div>
+      </div>`
+          : ""
+      }
     </article>
   `;
 }
 
-// Actions on catalog items
-catalogEl.addEventListener("click", (e) => {
+// Actions on catalog items (Admin only)
+if (isAdmin) {
+  catalogEl.addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-action]");
   if (!btn) return;
   const itemEl = btn.closest("[data-id]");
@@ -220,7 +239,8 @@ catalogEl.addEventListener("click", (e) => {
       renderCatalog();
     }
   }
-});
+  });
+}
 
 // Modal handling
 function setCoverPreview(src) {
@@ -273,13 +293,14 @@ function closeModal() {
   modalEl.classList.add("hidden");
 }
 
-document.getElementById("btn-open-add").addEventListener("click", () => openModal());
-document.getElementById("btn-empty-add").addEventListener("click", () => openModal());
-document.getElementById("btn-close-modal").addEventListener("click", closeModal);
-document.getElementById("btn-cancel-modal").addEventListener("click", closeModal);
-modalEl.addEventListener("click", (e) => {
-  if (e.target === modalEl) closeModal();
-});
+if (isAdmin) {
+  document.getElementById("btn-open-add").addEventListener("click", () => openModal());
+  document.getElementById("btn-empty-add").addEventListener("click", () => openModal());
+  document.getElementById("btn-close-modal").addEventListener("click", closeModal);
+  document.getElementById("btn-cancel-modal").addEventListener("click", closeModal);
+  modalEl.addEventListener("click", (e) => {
+    if (e.target === modalEl) closeModal();
+  });
 
 // Save book
 bookForm.addEventListener("submit", (e) => {
@@ -732,13 +753,14 @@ async function fetchOpenLibrary(isbn) {
   };
 }
 
-btnLookupIsbn.addEventListener("click", lookupByIsbn);
-isbnInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    lookupByIsbn();
-  }
-});
+  btnLookupIsbn.addEventListener("click", lookupByIsbn);
+  isbnInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      lookupByIsbn();
+    }
+  });
+}
 
 // Filters & View Toggle
 searchInput.addEventListener("input", renderCatalog);
@@ -758,41 +780,9 @@ viewListBtn.addEventListener("click", () => {
   renderCatalog();
 });
 
-// Export / Import JSON
-document.getElementById("btn-export").addEventListener("click", () => {
-  const blob = new Blob([JSON.stringify(books, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `catalogo-livros-${new Date().toISOString().slice(0, 10)}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-});
-
-document.getElementById("import-input").addEventListener("change", (e) => {
-  const file = e.target.files?.[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      const parsed = JSON.parse(reader.result);
-      if (Array.isArray(parsed)) {
-        books = parsed;
-        saveBooks();
-        renderCatalog();
-      } else {
-        alert("Arquivo inválido.");
-      }
-    } catch {
-      alert("Não foi possível ler o arquivo JSON.");
-    }
-  };
-  reader.readAsText(file);
-  e.target.value = "";
-});
-
 // Google Sheets Sync
 const syncStatusTextEl = document.getElementById("sync-status-text");
+const publicSyncBadgeEl = document.getElementById("public-sync-badge");
 const syncModalEl = document.getElementById("sync-modal");
 const syncFormEl = document.getElementById("sync-form");
 const sheetsUrlInput = document.getElementById("sheets-url");
@@ -801,27 +791,32 @@ const btnDisconnectSync = document.getElementById("btn-disconnect-sync");
 const btnPullSync = document.getElementById("btn-pull-sync");
 
 function setSyncStatus(label) {
-  syncStatusTextEl.textContent = `☁️ ${label}`;
+  if (syncStatusTextEl) syncStatusTextEl.textContent = `☁️ ${label}`;
 }
 
 function setSyncFeedback(msg, type = "") {
+  if (!syncFeedbackEl) return;
   syncFeedbackEl.textContent = msg;
   syncFeedbackEl.className = `feedback-text ${type}`.trim();
 }
 
 async function pushToSheets() {
-  if (!sheetsUrl) return false;
+  if (!sheetsUrl || !isAdmin) return false;
   setSyncStatus("Salvando...");
   try {
     const res = await fetch(sheetsUrl, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ books }),
+      body: JSON.stringify({ adminKey, books }),
     });
     const data = await res.json();
     if (data?.ok) {
       setSyncStatus("Sincronizado");
       return true;
+    }
+    if (data?.error) {
+      setSyncStatus("Senha inválida");
+      return false;
     }
   } catch {
     // Handled below
@@ -837,7 +832,7 @@ async function pullFromSheets({ pushIfEmpty = false } = {}) {
     const res = await fetch(sheetsUrl);
     const data = await res.json();
     if (data?.ok && Array.isArray(data.books)) {
-      if (data.books.length === 0 && pushIfEmpty && books.length > 0) {
+      if (isAdmin && data.books.length === 0 && pushIfEmpty && books.length > 0) {
         await pushToSheets();
         return true;
       }
@@ -845,6 +840,7 @@ async function pullFromSheets({ pushIfEmpty = false } = {}) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(books));
       renderCatalog();
       setSyncStatus("Sincronizado");
+      if (publicSyncBadgeEl) publicSyncBadgeEl.textContent = "Catálogo atualizado";
       return true;
     }
   } catch {
@@ -854,69 +850,164 @@ async function pullFromSheets({ pushIfEmpty = false } = {}) {
   return false;
 }
 
-function openSyncModal() {
-  sheetsUrlInput.value = sheetsUrl;
-  setSyncFeedback("");
-  btnDisconnectSync.classList.toggle("hidden", !sheetsUrl);
-  btnPullSync.classList.toggle("hidden", !sheetsUrl);
-  syncModalEl.classList.remove("hidden");
-}
+if (isAdmin) {
+  // Export / Import JSON
+  document.getElementById("btn-export").addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(books, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `catalogo-livros-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
 
-function closeSyncModal() {
-  syncModalEl.classList.add("hidden");
-}
+  document.getElementById("import-input").addEventListener("change", (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (Array.isArray(parsed)) {
+          books = parsed;
+          saveBooks();
+          renderCatalog();
+        } else {
+          alert("Arquivo inválido.");
+        }
+      } catch {
+        alert("Não foi possível ler o arquivo JSON.");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  });
 
-document.getElementById("btn-open-sync").addEventListener("click", openSyncModal);
-document.getElementById("btn-close-sync").addEventListener("click", closeSyncModal);
-syncModalEl.addEventListener("click", (e) => {
-  if (e.target === syncModalEl) closeSyncModal();
-});
-
-syncFormEl.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const url = sheetsUrlInput.value.trim();
-  if (!url) {
-    setSyncFeedback("Cole a URL do Google Apps Script.", "error");
-    return;
+  function openSyncModal() {
+    sheetsUrlInput.value = sheetsUrl;
+    setSyncFeedback("");
+    btnDisconnectSync.classList.toggle("hidden", !sheetsUrl);
+    btnPullSync.classList.toggle("hidden", !sheetsUrl);
+    syncModalEl.classList.remove("hidden");
   }
 
-  sheetsUrl = url;
-  localStorage.setItem(SHEETS_URL_KEY, sheetsUrl);
-  setSyncFeedback("Conectando à planilha...");
-
-  const ok = await pullFromSheets({ pushIfEmpty: true });
-  if (ok) {
-    setSyncFeedback("Conectado e sincronizado com sucesso!", "success");
-    btnDisconnectSync.classList.remove("hidden");
-    btnPullSync.classList.remove("hidden");
-  } else {
-    setSyncFeedback("Não foi possível conectar. Verifique a URL e as permissões.", "error");
+  function closeSyncModal() {
+    syncModalEl.classList.add("hidden");
   }
-});
 
-btnPullSync.addEventListener("click", async () => {
-  setSyncFeedback("Recarregando dados da planilha...");
-  const ok = await pullFromSheets();
-  setSyncFeedback(
-    ok ? "Catálogo atualizado a partir da planilha!" : "Erro ao carregar da planilha.",
-    ok ? "success" : "error"
-  );
-});
+  document.getElementById("btn-open-sync").addEventListener("click", openSyncModal);
+  document.getElementById("btn-close-sync").addEventListener("click", closeSyncModal);
+  syncModalEl.addEventListener("click", (e) => {
+    if (e.target === syncModalEl) closeSyncModal();
+  });
 
-btnDisconnectSync.addEventListener("click", () => {
-  sheetsUrl = "";
-  localStorage.removeItem(SHEETS_URL_KEY);
-  sheetsUrlInput.value = "";
-  setSyncStatus("Local");
-  btnDisconnectSync.classList.add("hidden");
-  btnPullSync.classList.add("hidden");
-  setSyncFeedback("Desconectado. Os dados continuam salvos localmente.", "success");
-});
+  syncFormEl.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const url = sheetsUrlInput.value.trim();
+    if (!url) {
+      setSyncFeedback("Cole a URL do Google Apps Script.", "error");
+      return;
+    }
 
-// Init
-renderCatalog();
-if (sheetsUrl) {
-  pullFromSheets({ pushIfEmpty: true });
+    sheetsUrl = url;
+    localStorage.setItem(SHEETS_URL_KEY, sheetsUrl);
+    setSyncFeedback("Conectando à planilha...");
+
+    const ok = await pullFromSheets({ pushIfEmpty: true });
+    if (ok) {
+      setSyncFeedback("Conectado e sincronizado com sucesso!", "success");
+      btnDisconnectSync.classList.remove("hidden");
+      btnPullSync.classList.remove("hidden");
+    } else {
+      setSyncFeedback("Não foi possível conectar. Verifique a URL e as permissões.", "error");
+    }
+  });
+
+  btnPullSync.addEventListener("click", async () => {
+    setSyncFeedback("Recarregando dados da planilha...");
+    const ok = await pullFromSheets();
+    setSyncFeedback(
+      ok ? "Catálogo atualizado a partir da planilha!" : "Erro ao carregar da planilha.",
+      ok ? "success" : "error"
+    );
+  });
+
+  btnDisconnectSync.addEventListener("click", () => {
+    sheetsUrl = "";
+    localStorage.removeItem(SHEETS_URL_KEY);
+    sheetsUrlInput.value = "";
+    setSyncStatus("Local");
+    btnDisconnectSync.classList.add("hidden");
+    btnPullSync.classList.add("hidden");
+    setSyncFeedback("Desconectado. Os dados continuam salvos localmente.", "success");
+  });
+
+  // Admin Login Gate
+  const adminGateEl = document.getElementById("admin-gate");
+  const adminAppEl = document.getElementById("admin-app");
+  const adminLoginForm = document.getElementById("admin-login-form");
+  const adminPasswordInput = document.getElementById("admin-password");
+  const adminLoginFeedback = document.getElementById("admin-login-feedback");
+  const btnAdminLogin = document.getElementById("btn-admin-login");
+
+  function unlockAdminApp() {
+    adminGateEl.classList.add("hidden");
+    adminAppEl.classList.remove("hidden");
+    renderCatalog();
+    if (sheetsUrl) {
+      pullFromSheets({ pushIfEmpty: true });
+    } else {
+      setSyncStatus("Local");
+    }
+  }
+
+  adminLoginForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const pwd = adminPasswordInput.value;
+    if (!pwd) return;
+
+    if (!sheetsUrl) {
+      adminKey = pwd;
+      sessionStorage.setItem(ADMIN_KEY_STORAGE, adminKey);
+      unlockAdminApp();
+      return;
+    }
+
+    btnAdminLogin.disabled = true;
+    adminLoginFeedback.textContent = "Verificando senha...";
+    adminLoginFeedback.className = "feedback-text";
+
+    try {
+      const res = await fetch(sheetsUrl, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "verify", adminKey: pwd }),
+      });
+      const data = await res.json();
+      if (data?.ok) {
+        adminKey = pwd;
+        sessionStorage.setItem(ADMIN_KEY_STORAGE, adminKey);
+        unlockAdminApp();
+      } else {
+        adminLoginFeedback.textContent = data?.error || "Senha incorreta.";
+        adminLoginFeedback.className = "feedback-text error";
+      }
+    } catch {
+      adminLoginFeedback.textContent = "Erro ao validar na planilha. Verifique a conexão.";
+      adminLoginFeedback.className = "feedback-text error";
+    } finally {
+      btnAdminLogin.disabled = false;
+    }
+  });
+
+  if (adminKey) {
+    unlockAdminApp();
+  }
 } else {
-  setSyncStatus("Local");
+  // Public view (read-only)
+  renderCatalog();
+  if (sheetsUrl) {
+    pullFromSheets();
+  }
 }

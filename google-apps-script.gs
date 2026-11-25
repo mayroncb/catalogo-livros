@@ -1,6 +1,10 @@
 const SHEET_NAME = "Catalogo";
 const HEADERS = ["id", "isbn", "title", "author", "price", "qty", "cover", "createdAt"];
 
+// IMPORTANTE: Troque esta senha antes de implantar no Google Apps Script.
+// Ela protege sua planilha contra edições não autorizadas.
+const ADMIN_KEY = "admin123";
+
 function getCatalogSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(SHEET_NAME);
@@ -47,8 +51,16 @@ function doGet() {
 
 function doPost(e) {
   const payload = JSON.parse(e.postData.contents || "{}");
-  const books = Array.isArray(payload.books) ? payload.books : [];
 
+  if (String(payload.adminKey || "") !== ADMIN_KEY) {
+    return jsonResponse({ ok: false, error: "Senha de administrador incorreta." });
+  }
+
+  if (payload.action === "verify") {
+    return jsonResponse({ ok: true });
+  }
+
+  const books = Array.isArray(payload.books) ? payload.books : [];
   const sheet = getCatalogSheet();
   const lastRow = sheet.getLastRow();
   if (lastRow > 1) {
