@@ -1,6 +1,7 @@
 const STORAGE_KEY = "minha_estante_catalogo_v1";
 const SHEETS_URL_KEY = "minha_estante_sheets_url_v1";
 const ADMIN_KEY_STORAGE = "minha_estante_admin_key_v1";
+const PENDING_SYNC_KEY = "minha_estante_pending_sync_v1";
 
 const isAdmin = document.body.dataset.mode === "admin";
 const urlParams = new URLSearchParams(window.location.search);
@@ -13,6 +14,9 @@ let sheetsUrl =
   window.APP_CONFIG?.sheetsUrl ||
   "";
 let adminKey = sessionStorage.getItem(ADMIN_KEY_STORAGE) || "";
+let pendingSync = localStorage.getItem(PENDING_SYNC_KEY) === "1";
+let isSyncing = false;
+let autoSyncTimer = null;
 let currentView = "grid"; // "grid" | "list"
 
 // Elements
@@ -65,9 +69,19 @@ function loadBooks() {
   }
 }
 
+function setPendingSync(value) {
+  pendingSync = value;
+  if (value) {
+    localStorage.setItem(PENDING_SYNC_KEY, "1");
+  } else {
+    localStorage.removeItem(PENDING_SYNC_KEY);
+  }
+}
+
 function saveBooks() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(books));
   if (sheetsUrl) {
+    setPendingSync(true);
     pushToSheets();
   }
 }
@@ -801,7 +815,8 @@ function setSyncFeedback(msg, type = "") {
 }
 
 async function pushToSheets() {
-  if (!sheetsUrl || !isAdmin) return false;
+  if (!sheetsUrl || !isAdmin || isSyncing) return false;
+  isSyncing = true;
   setSyncStatus("Salvando...");
   try {
     const res = await fetch(sheetsUrl, {
@@ -811,6 +826,7 @@ async function pushToSheets() {
     });
     const data = await res.json();
     if (data?.ok) {
+      setPendingSync(false);
       setSyncStatus("Sincronizado");
       return true;
     }
@@ -820,35 +836,77 @@ async function pushToSheets() {
     }
   } catch {
     // Handled below
+  } finally {
+    isSyncing = false;
   }
-  setSyncStatus("Erro na nuvem");
+  setSyncStatus("Pendente (offline)");
   return false;
 }
 
-async function pullFromSheets({ pushIfEmpty = false } = {}) {
-  if (!sheetsUrl) return false;
+async function pullFromSheets({ pushIfEmpty = false, force = false } = {}) {
+  if (!sheetsUrl || isSyncing) return false;
+  if (pendingSync && !force) {
+    return isAdmin ? pushToSheets() : false;
+  }
+
+  isSyncing = true;
   setSyncStatus("Carregando...");
   try {
     const res = await fetch(sheetsUrl);
     const data = await res.json();
     if (data?.ok && Array.isArray(data.books)) {
       if (isAdmin && data.books.length === 0 && pushIfEmpty && books.length > 0) {
+        isSyncing = false;
         await pushToSheets();
         return true;
       }
-      books = data.books;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(books));
-      renderCatalog();
+      const changed = JSON.stringify(data.books) !== JSON.stringify(books);
+      if (changed) {
+        books = data.books;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(books));
+        renderCatalog();
+      }
       setSyncStatus("Sincronizado");
-      if (publicSyncBadgeEl) publicSyncBadgeEl.textContent = "Catálogo atualizado";
+      if (publicSyncBadgeEl) publicSyncBadgeEl.textContent = "Sincronizado automaticamente";
       return true;
     }
   } catch {
     // Handled below
+  } finally {
+    isSyncing = false;
   }
   setSyncStatus("Erro na nuvem");
   return false;
 }
+
+function runAutoSyncTick() {
+  if (!sheetsUrl || document.visibilityState !== "visible") return;
+  if (isAdmin) {
+    if (pendingSync) {
+      pushToSheets();
+      return;
+    }
+    if (!modalEl.classList.contains("hidden")) return;
+  }
+  pullFromSheets();
+}
+
+function startAutoSync() {
+  if (autoSyncTimer) clearInterval(autoSyncTimer);
+  autoSyncTimer = setInterval(runAutoSyncTick, 30000);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") runAutoSyncTick();
+});
+
+window.addEventListener("online", () => {
+  if (pendingSync && isAdmin) {
+    pushToSheets();
+  } else {
+    runAutoSyncTick();
+  }
+});
 
 if (isAdmin) {
   // Export / Import JSON
@@ -951,15 +1009,36 @@ if (isAdmin) {
   const adminLoginFeedback = document.getElementById("admin-login-feedback");
   const btnAdminLogin = document.getElementById("btn-admin-login");
 
+  const btnCopyPublicLink = document.getElementById("btn-copy-public-link");
+  btnCopyPublicLink.addEventListener("click", async () => {
+    const publicUrl = new URL("index.html", window.location.href);
+    if (sheetsUrl && !window.APP_CONFIG?.sheetsUrl) {
+      publicUrl.searchParams.set("sheets", sheetsUrl);
+    }
+    try {
+      await navigator.clipboard.writeText(publicUrl.toString());
+      const orig = btnCopyPublicLink.textContent;
+      btnCopyPublicLink.textContent = "✓ Link copiado!";
+      setTimeout(() => (btnCopyPublicLink.textContent = orig), 2000);
+    } catch {
+      prompt("Copie o link público:", publicUrl.toString());
+    }
+  });
+
   function unlockAdminApp() {
     adminGateEl.classList.add("hidden");
     adminAppEl.classList.remove("hidden");
     renderCatalog();
     if (sheetsUrl) {
-      pullFromSheets({ pushIfEmpty: true });
+      if (pendingSync) {
+        pushToSheets();
+      } else {
+        pullFromSheets({ pushIfEmpty: true });
+      }
     } else {
       setSyncStatus("Local");
     }
+    startAutoSync();
   }
 
   adminLoginForm.addEventListener("submit", async (e) => {
@@ -1010,4 +1089,5 @@ if (isAdmin) {
   if (sheetsUrl) {
     pullFromSheets();
   }
+  startAutoSync();
 }
