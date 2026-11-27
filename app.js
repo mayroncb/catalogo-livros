@@ -851,6 +851,7 @@ async function pullFromSheets({ pushIfEmpty = false, force = false } = {}) {
 
   isSyncing = true;
   setSyncStatus("Carregando...");
+  if (publicSyncBadgeEl) publicSyncBadgeEl.textContent = "Carregando catálogo...";
   try {
     const res = await fetch(sheetsUrl);
     const data = await res.json();
